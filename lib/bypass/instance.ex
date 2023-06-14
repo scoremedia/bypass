@@ -4,7 +4,6 @@ defmodule Bypass.Instance do
   use GenServer, restart: :transient
 
   import Bypass.Utils
-  import Plug.Router.Utils, only: [build_path_match: 1]
 
   def start_link(opts \\ []) do
     GenServer.start_link(__MODULE__, [opts])
@@ -135,7 +134,6 @@ defmodule Bypass.Instance do
         route,
         new_route(
           fun,
-          path,
           case expect do
             :expect -> :once_or_more
             :expect_once -> :once
@@ -276,46 +274,17 @@ defmodule Bypass.Instance do
   end
 
   defp route_info(method, path, %{expectations: expectations} = _state) do
-    segments = build_path_match(path) |> elem(1)
-
     route =
-      expectations
-      |> Enum.reduce_while(
-        {:any, :any, %{}},
-        fn
-          {{^method, path_pattern}, %{path_parts: path_parts}}, acc ->
-            case match_route(segments, path_parts) do
-              {true, params} -> {:halt, {method, path_pattern, params}}
-              {false, _} -> {:cont, acc}
-            end
+      case Map.get(expectations, {method, path}, :no_expectations) do
+        :no_expectations ->
+          {:any, :any}
 
-          _, acc ->
-            {:cont, acc}
-        end
-      )
+        _ ->
+          {method, path}
+      end
 
     {route, Map.get(expectations, route)}
   end
-
-  defp match_route(path, route) when length(path) == length(route) do
-    path
-    |> Enum.zip(route)
-    |> Enum.reduce_while(
-      {true, %{}},
-      fn
-        {value, {param, _, _}}, {_, params} ->
-          {:cont, {true, Map.put(params, Atom.to_string(param), value)}}
-
-        {segment, segment}, acc ->
-          {:cont, acc}
-
-        _, _ ->
-          {:halt, {false, nil}}
-      end
-    )
-  end
-
-  defp match_route(_, _), do: {false, nil}
 
   defp do_up(port, ref) do
     plug_opts = [bypass_instance: self()]
@@ -398,23 +367,14 @@ defmodule Bypass.Instance do
     |> length
   end
 
-  defp new_route(fun, path_parts, expected) when is_list(path_parts) do
+  defp new_route(fun, expected) do
     %{
       fun: fun,
       expected: expected,
-      path_parts: path_parts,
       retained_plugs: %{},
       results: [],
       request_count: 0
     }
-  end
-
-  defp new_route(fun, :any, expected) do
-    new_route(fun, [], expected)
-  end
-
-  defp new_route(fun, path, expected) do
-    new_route(fun, build_path_match(path) |> elem(1), expected)
   end
 
   defp cowboy_opts(port, ref, socket) do
